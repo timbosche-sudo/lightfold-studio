@@ -236,3 +236,25 @@ a.btn { color: inherit; }
 .tool-group button.active { color: var(--accent); background: var(--bg-input); }
 .section-slider label { display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 0.84rem; color: var(--text-dim); }
 .section-slider input { width: 160px; }
+
+/* Form Studio */
+.family-picker { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; padding-bottom: 8px; }
+.family-card {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 2px 8px; min-width: 0; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-input); color: var(--text-dim); font-size: 0.82rem; font-weight: 500;
+}
+.family-card.active { border-color: var(--accent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+.family-sketch .sk-sil { fill: color-mix(in srgb, var(--text) 14%, transparent); stroke: var(--text-dim); stroke-width: 1; stroke-linejoin: round; }
+.family-sketch .sk-sec { fill: none; stroke: var(--accent); stroke-width: 1.1; stroke-linejoin: round; }
+.family-card:not(.active) .sk-sec { stroke: var(--text-dim); }
+.family-desc { margin: 0 0 10px; font-size: 0.84rem; line-height: 1.45; color: var(--text-dim); }
+.example-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.example-card {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: none; font-size: 0.78rem; color: var(--text-dim); min-height: var(--touch);
+}
+.example-card:active { border-color: var(--accent); }
+.sculpt-actions { justify-content: flex-end; margin-top: -4px; }
+.seed-row { display: flex; align-items: center; gap: 4px; }
+.seed-value { font-variant-numeric: tabular-nums; color: var(--text-dim); margin-right: 4px; }
+.seed-row .btn.small { min-width: 36px; }

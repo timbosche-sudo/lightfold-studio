@@ -46,6 +46,10 @@ export interface ValidationOptions {
   /** Extra checks contributed by the part builder (e.g. parameter checks). */
   extraChecks?: ValidationCheck[];
   expectedComponents?: number;
+  /** The mesh was just produced by the Manifold kernel with status NoError; skip re-importing it. */
+  kernelVerified?: boolean;
+  /** Skip the (expensive) self-intersection test, giving the reason shown in the report. */
+  skipSelfIntersection?: string;
 }
 
 const MAX_PROBLEM_EDGES = 2000;
@@ -85,35 +89,41 @@ export function validateMesh(mesh: MeshData, opts: ValidationOptions = {}): Vali
   add('degenerate', 'Degenerate triangles', degenerate ? 'error' : 'pass',
     degenerate ? `${degenerate} zero-area or collapsed triangles.` : 'No degenerate triangles.');
 
-  // Edge topology. Key = lo * vCount + hi (safe for < ~94M vertices).
-  const undirected = new Map<number, number>();
-  const directed = new Map<number, number>();
+  // Edge topology: one sorted array of undirected edge keys, each tagged with
+  // its direction in the low bit (key = (lo * vCount + hi) * 2 + dir; exact in
+  // a double for < ~67M vertices). Each run of equal undirected keys is one
+  // edge; a closed, consistently wound mesh has exactly one use per direction.
+  const ek = new Float64Array(tCount * 3);
   for (let t = 0; t < tCount; t++) {
     for (let e = 0; e < 3; e++) {
-      const a = idx[t * 3 + e];
-      const b = idx[t * 3 + ((e + 1) % 3)];
-      const lo = Math.min(a, b), hi = Math.max(a, b);
-      const uk = lo * vCount + hi;
-      undirected.set(uk, (undirected.get(uk) ?? 0) + 1);
-      const dk = a * vCount + b;
-      directed.set(dk, (directed.get(dk) ?? 0) + 1);
+      const a = idx[t * 3 + e], b = idx[t * 3 + ((e + 1) % 3)];
+      ek[t * 3 + e] = a < b ? (a * vCount + b) * 2 : (b * vCount + a) * 2 + 1;
     }
   }
-  let boundary = 0, nonManifold = 0, misoriented = 0;
+  ek.sort();
+  let boundary = 0, nonManifold = 0, misoriented = 0, edges = 0;
   const problem: number[] = [];
-  const pushEdge = (a: number, b: number) => {
+  const pushEdge = (key: number) => {
     if (problem.length / 6 >= MAX_PROBLEM_EDGES) return;
+    const u = Math.floor(key / 2);
+    const a = Math.floor(u / vCount), b = u - a * vCount;
     problem.push(p[a * 3], p[a * 3 + 1], p[a * 3 + 2], p[b * 3], p[b * 3 + 1], p[b * 3 + 2]);
   };
-  for (const [key, count] of undirected) {
-    const lo = Math.floor(key / vCount), hi = key % vCount;
-    if (count === 1) { boundary++; pushEdge(lo, hi); }
-    else if (count > 2) { nonManifold++; pushEdge(lo, hi); }
-    else {
-      const f = directed.get(lo * vCount + hi) ?? 0;
-      const r = directed.get(hi * vCount + lo) ?? 0;
-      if (f !== 1 || r !== 1) { misoriented++; pushEdge(lo, hi); }
+  for (let i = 0; i < ek.length; ) {
+    const u = Math.floor(ek[i] / 2);
+    let fwd = 0, rev = 0, n = 0;
+    while (i + n < ek.length && Math.floor(ek[i + n] / 2) === u) {
+      if (ek[i + n] % 2 === 0) fwd++;
+      else rev++;
+      n++;
     }
+    const key = ek[i];
+    i += n;
+    edges++;
+    const total = fwd + rev;
+    if (total === 1) { boundary++; pushEdge(key); }
+    else if (total > 2) { nonManifold++; pushEdge(key); }
+    else if (fwd !== 1 || rev !== 1) { misoriented++; pushEdge(key); }
   }
   add('watertight', 'Watertight (closed)', boundary ? 'error' : 'pass',
     boundary ? `${boundary} open boundary edges — the surface has holes.` : 'Every edge is shared by exactly two triangles.');
@@ -157,7 +167,6 @@ export function validateMesh(mesh: MeshData, opts: ValidationOptions = {}): Vali
   }
 
   // Euler characteristic → genus (only meaningful for closed meshes).
-  const edges = undirected.size;
   let genus: number | null = null;
   if (closed) {
     const usedVerts = used.reduce((s, u) => s + u, 0);
@@ -166,14 +175,20 @@ export function validateMesh(mesh: MeshData, opts: ValidationOptions = {}): Vali
   }
 
   // Self-intersection.
-  const si = findSelfIntersections(mesh);
-  add('self-intersection', 'No self-intersections', si.count ? 'error' : 'pass',
-    si.count
-      ? `${si.truncated ? 'At least ' : ''}${si.count} intersecting triangle pairs, first near (${si.locations[0].map((v) => v.toFixed(1)).join(', ')}) mm.`
-      : 'No intersecting non-adjacent triangles.');
+  const si = opts.skipSelfIntersection ? { count: 0, locations: [], truncated: false } : findSelfIntersections(mesh);
+  if (opts.skipSelfIntersection) {
+    add('self-intersection', 'No self-intersections', 'skipped', opts.skipSelfIntersection);
+  } else {
+    add('self-intersection', 'No self-intersections', si.count ? 'error' : 'pass',
+      si.count
+        ? `${si.truncated ? 'At least ' : ''}${si.count} intersecting triangle pairs, first near (${si.locations[0].map((v) => v.toFixed(1)).join(', ')}) mm.`
+        : 'No intersecting non-adjacent triangles.');
+  }
 
   // Independent check with the Manifold kernel.
-  if (opts.kernel) {
+  if (opts.kernelVerified) {
+    add('kernel', 'Manifold kernel acceptance', 'pass', 'Produced by the Manifold geometry kernel as a valid solid (re-verified on export).');
+  } else if (opts.kernel) {
     try {
       const m = toManifold(opts.kernel, mesh);
       const status = m.status();

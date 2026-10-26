@@ -4,7 +4,7 @@ import { defaultCollarParams, deriveCollarDimensions } from './collar/collar';
 import { loadKernel, type Kernel, toManifold } from './kernel/manifoldKernel';
 import { BAMBU_P1S, PRINT_PRESETS } from './presets';
 import { defaultShadeDesign } from './generators/registry';
-import { cylinderShade, cylinderShadeProfile } from './generators/cylinder';
+import { cylinderShade, cylinderShadeProfile, defaultCommonParams } from './generators/cylinder';
 import { checkProfile, revolveProfile } from './core/revolve';
 import { computeBounds, signedVolume } from './core/mesh';
 import { parseBinaryStl, writeBinaryStl } from './export/stl';
@@ -16,9 +16,13 @@ beforeAll(async () => {
   kernel = await loadKernel();
 });
 
+/** Full cylinder parameters (shared dimensions + family). */
+const cyl = (patch: Partial<CylinderShadeParams> = {}): CylinderShadeParams => ({ ...defaultCommonParams(), ...cylinderShade.defaults(), ...patch });
+
 const shadeWith = (patch: Partial<CylinderShadeParams>): ShadeDesign => {
   const s = defaultShadeDesign();
-  return { ...s, cylinder: { ...s.cylinder, ...patch } };
+  const { transitionProfile, ...common } = patch;
+  return { ...s, common: { ...s.common, ...common }, cylinder: { transitionProfile: transitionProfile ?? s.cylinder.transitionProfile } };
 };
 
 const job = (collar: CollarParams, shade: ShadeDesign, quality: BuildJob['quality'] = 'fabrication'): BuildJob => ({
@@ -45,7 +49,7 @@ describe('cylinder shade generator', () => {
   const ctx = shadeContext(defaultCollarParams(), PRINT_PRESETS['pla-0.4']);
 
   it('defaults give a 9 inch overall height and a 5 inch body', () => {
-    const s = cylinderShade.defaults();
+    const s = cyl();
     expect(ctx.attachment.z + s.height).toBeCloseTo(228.6, 6);
     expect(s.maxDiameter).toBeCloseTo(127, 6);
     expect(cylinderShade.check(s, ctx).filter((i) => i.severity === 'error')).toEqual([]);
@@ -53,19 +57,19 @@ describe('cylinder shade generator', () => {
 
   it('profiles are simple closed polygons for smooth, linear and straight variants', () => {
     for (const patch of [{}, { transitionProfile: 'linear' as const }, { maxDiameter: ctx.attachment.radius * 2 }, { transitionHeight: 150 }]) {
-      const p = { ...cylinderShade.defaults(), ...patch };
+      const p = cyl(patch);
       expect(checkProfile(cylinderShadeProfile(p, ctx, 24))).toEqual([]);
     }
   });
 
   it('starts exactly at the shoulder outer radius', () => {
-    const prof = cylinderShadeProfile(cylinderShade.defaults(), ctx, 16);
+    const prof = cylinderShadeProfile(cyl(), ctx, 16);
     const atSeam = prof.filter(([, z]) => Math.abs(z - ctx.attachment.z) < 1e-9).map(([r]) => r);
     expect(Math.max(...atSeam)).toBeCloseTo(ctx.attachment.radius, 9);
   });
 
   it('keeps the specified wall thickness normal to the surface', () => {
-    const p = { ...cylinderShade.defaults(), transitionProfile: 'linear' as const };
+    const p = cyl({ transitionProfile: 'linear' });
     const mesh = revolveProfile(cylinderShadeProfile(p, ctx, 8), 64);
     expect(validateMesh(mesh).fatal).toBe(false);
     // Linear flare: horizontal offset = t * sqrt(1 + slope²).
@@ -78,7 +82,7 @@ describe('cylinder shade generator', () => {
 
   it('rejects a body narrower than the shoulder, a too-thin wall and an over-tall transition', () => {
     const fields = (patch: Partial<CylinderShadeParams>) =>
-      cylinderShade.check({ ...cylinderShade.defaults(), ...patch }, ctx).filter((i) => i.severity === 'error').map((i) => i.field);
+      cylinderShade.check(cyl(patch), ctx).filter((i) => i.severity === 'error').map((i) => i.field);
     expect(fields({ maxDiameter: 90 })).toContain('maxDiameter');
     expect(fields({ wallThickness: 0.5 })).toContain('wallThickness');
     expect(fields({ wallThickness: 6 })).toContain('wallThickness');
@@ -87,7 +91,7 @@ describe('cylinder shade generator', () => {
   });
 
   it('warns about steep transitions', () => {
-    const issues = cylinderShade.check({ ...cylinderShade.defaults(), maxDiameter: 200, transitionHeight: 20 }, ctx);
+    const issues = cylinderShade.check(cyl({ maxDiameter: 200, transitionHeight: 20 }), ctx);
     expect(issues.some((i) => i.severity === 'warning' && i.field === 'transitionHeight')).toBe(true);
   });
 });

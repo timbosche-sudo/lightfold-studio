@@ -109,18 +109,26 @@ interface NumberFieldProps {
   integer?: boolean;
   suffix?: string;
   disabled?: boolean;
+  /** Display multiplier (e.g. 100 to show a 0–1 value as a percentage). */
+  scale?: number;
+  hint?: ReactNode;
 }
 
-export function NumberField({ label, value, onChange, min, max, step = 1, integer, suffix, disabled }: NumberFieldProps) {
+export function NumberField({ label, value, onChange, min, max, step = 1, integer, suffix, disabled, scale = 1, hint }: NumberFieldProps) {
   const id = useId();
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
+  const show = (v: number) => String(Math.round(v * scale * 1000) / 1000);
+  const [draft, setDraft] = useState(show(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setDraft(show(value));
+  }, [value, editing, scale]);
   const commit = () => {
-    let v = Number(draft);
-    if (!Number.isFinite(v)) return setDraft(String(value));
+    setEditing(false);
+    let v = Number(draft) / scale;
+    if (!Number.isFinite(v)) return setDraft(show(value));
     if (integer) v = Math.round(v);
     v = Math.min(max, Math.max(min, v));
-    setDraft(String(v));
+    setDraft(show(v));
     onChange(v);
   };
   return (
@@ -134,6 +142,10 @@ export function NumberField({ label, value, onChange, min, max, step = 1, intege
             inputMode={integer ? 'numeric' : 'decimal'}
             value={draft}
             disabled={disabled}
+            onFocus={(e) => {
+              setEditing(true);
+              e.currentTarget.select();
+            }}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
@@ -147,11 +159,17 @@ export function NumberField({ label, value, onChange, min, max, step = 1, intege
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={Math.min(max, Math.max(min, value))}
         disabled={disabled}
         aria-label={`${label} slider`}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => onChange(integer ? Math.round(Number(e.target.value)) : Number(e.target.value))}
       />
+      {hint ? (
+        <div className="field-foot">
+          <span />
+          <span className="hint">{hint}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

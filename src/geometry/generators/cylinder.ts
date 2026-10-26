@@ -1,7 +1,8 @@
-import type { CylinderShadeParams } from '../../types/project';
+import type { CylinderFamilyParams, CylinderShadeParams, ShadeCommonParams } from '../../types/project';
 import { inToMm } from '../../utils/units';
 import { checkProfile, revolveProfile, type Profile2D } from '../core/revolve';
-import type { ParamIssue, ShadeContext, ShadeGenerator, ShadeSummary } from './types';
+import type { ParamIssue, Polyline, ShadeContext, ShadeGenerator, ShadeSummary } from './types';
+import { SEGMENTS } from '../core/quality';
 
 /** Normalised transition t ∈ [0,1] → blend ∈ [0,1], and its derivative. */
 function ease(profile: CylinderShadeParams['transitionProfile'], t: number): { f: number; df: number } {
@@ -40,33 +41,55 @@ function outerSamples(p: CylinderShadeParams, ctx: ShadeContext, rows: number): 
 }
 
 /** Closed (r, z) cross-section of the shade wall, CCW, including the overlap tab. */
-export function cylinderShadeProfile(p: CylinderShadeParams, ctx: ShadeContext, rows: number): Profile2D {
+export function cylinderShadeProfile(p: CylinderShadeParams, ctx: ShadeContext, rows: number, withTab = true): Profile2D {
   const outer = outerSamples(p, ctx, rows);
   // Offset along the surface normal so the wall is `wallThickness` thick
   // everywhere, not just where it is vertical.
   const inner = outer.map((s) => ({ z: s.z, r: s.r - p.wallThickness * Math.sqrt(1 + s.slope * s.slope) }));
   const zBottom = ctx.attachment.z - ctx.overlapDepth;
   const pts: [number, number][] = [];
-  pts.push([inner[0].r, zBottom]);
-  pts.push([outer[0].r, zBottom]);
+  if (withTab) {
+    pts.push([inner[0].r, zBottom]);
+    pts.push([outer[0].r, zBottom]);
+  }
   for (const s of outer) pts.push([s.r, s.z]);
   for (let i = inner.length - 1; i >= 0; i--) pts.push([inner[i].r, inner[i].z]);
   return pts;
 }
 
-export const cylinderShade: ShadeGenerator<CylinderShadeParams> = {
+/** Shared dimensions: 9" overall with the default 5/8" collar, 5" body, 1" transition. */
+export function defaultCommonParams(): ShadeCommonParams {
+  return {
+    height: inToMm(9) - inToMm(1 / 2 + 1 / 8),
+    maxDiameter: inToMm(5),
+    wallThickness: 1.2,
+    transitionHeight: inToMm(1),
+  };
+}
+
+export const cylinderShade: ShadeGenerator<CylinderFamilyParams> = {
   id: 'cylinder',
   label: 'Cylinder',
+  description: 'A clean shell that flares from the collar to a straight body.',
+  minTransitionHeight: 0,
+  controls: [
+    {
+      key: 'transitionProfile',
+      kind: 'choice',
+      label: 'Transition profile',
+      options: [
+        { value: 'smooth', label: 'Smooth' },
+        { value: 'linear', label: 'Linear' },
+      ],
+    },
+  ],
+  examples: [
+    { name: 'Smooth flare', params: { transitionProfile: 'smooth' } },
+    { name: 'Conical flare', params: { transitionProfile: 'linear' } },
+  ],
 
   defaults() {
-    // 9" overall with the default 5/8" collar; 5" body diameter.
-    return {
-      height: inToMm(9) - inToMm(1 / 2 + 1 / 8),
-      maxDiameter: inToMm(5),
-      wallThickness: 1.2,
-      transitionHeight: inToMm(1),
-      transitionProfile: 'smooth',
-    };
+    return { transitionProfile: 'smooth' };
   },
 
   summarize(p, ctx): ShadeSummary {
@@ -117,9 +140,35 @@ export const cylinderShade: ShadeGenerator<CylinderShadeParams> = {
 
   build(p, ctx, opts) {
     const rows = opts.quality === 'fabrication' ? 48 : 16;
-    const profile = cylinderShadeProfile(p, ctx, rows);
+    const profile = cylinderShadeProfile(p, ctx, rows, !opts.draft);
     const problems = checkProfile(profile);
     if (problems.length) throw new Error(`Shade cross-section invalid: ${problems.join(' ')}`);
-    return revolveProfile(profile, opts.segments);
+    const segments = SEGMENTS[opts.quality];
+    return {
+      mesh: revolveProfile(profile, segments),
+      segments,
+      summary: { ...cylinderShade.summarize(p, ctx), minWallEstimate: p.wallThickness, envelopeScale: 1 },
+      issues: [],
+    };
+  },
+
+  sketch(p, ctx, us) {
+    const samples = outerSamples(p, ctx, 24);
+    const radiusAt = (z: number) => {
+      for (let i = 1; i < samples.length; i++) {
+        if (z <= samples[i].z) {
+          const a = samples[i - 1], b = samples[i];
+          return a.r + ((b.r - a.r) * (z - a.z)) / Math.max(b.z - a.z, 1e-9);
+        }
+      }
+      return samples[samples.length - 1].r;
+    };
+    const sections: Polyline[] = us.map((u) => {
+      const r = radiusAt(ctx.attachment.z + u * p.height);
+      return Array.from({ length: 48 }, (_, i) => [r * Math.cos((i / 48) * 2 * Math.PI), r * Math.sin((i / 48) * 2 * Math.PI)] as [number, number]);
+    });
+    const right: Polyline = samples.map((s) => [s.r, s.z - ctx.attachment.z]);
+    const silhouette: Polyline = [...right.map(([r, z]) => [-r, z] as [number, number]), ...right.reverse()];
+    return { sections, silhouette };
   },
 };

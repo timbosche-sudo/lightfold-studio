@@ -2,7 +2,7 @@
 
 Parametric sculpture design, lighting study, WLED control and 3D-fabrication environment for interchangeable 3D-printed lamp shades.
 
-**Current status: Phase 2 — first complete printable lampshade.** A cylindrical shade grows from the collar shoulder and exports with the collar as one fused, validated solid. Generative families (Phases 3–4), lighting simulation (5–6) and WLED control (7) are *not* built yet; their workspaces say so explicitly.
+**Current status: Phase 3 — generative form studio.** Five shade families (Cylinder, Twist, Ripple, Organic, Fold) grow from the standardized collar and export with it as one fused, validated solid. Lighting simulation (Phases 5–6) and WLED control (7) are *not* built yet; their workspaces say so explicitly.
 
 ## What works now
 
@@ -20,7 +20,11 @@ Parametric sculpture design, lighting study, WLED control and 3D-fabrication env
 | Form Studio: cylindrical shade — height (or overall height), maximum diameter, wall thickness, base transition height and profile (smooth / linear) | ✅ Phase 2 |
 | Shade + collar fused into one solid with Manifold; lampshade STL export | ✅ Phase 2 |
 | Assembly checks: flush attachment at the shoulder, maximum-diameter envelope, collar region unchanged by the shade, overhang guidance | ✅ Phase 2 |
-| Generative families (crumpled, twisted, louvered, perforated, organic, hybrids) | ⏳ Phase 3–4 |
+| Sculptural families: Twist / Helix, Ripple / Fluted, Organic / Flow, Fold / Pleat — live controls, examples, Vary, seeds | ✅ Phase 3 |
+| Shared dimensions (height, maximum-diameter envelope, wall, transition) kept across families | ✅ Phase 3 |
+| Guardrails: envelope fit, pinch clamp, measured minimum wall, steepness / thinning, pattern-aware sampling, overhang share | ✅ Phase 3 |
+| Instant draft preview while dragging, then fused + validated preview when you pause | ✅ Phase 3 |
+| Further families (crumpled paper, louvers, perforations) and hybrids | ⏳ later phases |
 | Light Lab | ⏳ Phase 5–6 |
 | Live Light (WLED) | ⏳ Phase 7 |
 | Shade-only export with joint, multipart splitting | ⏳ Phase 8 |
@@ -94,6 +98,32 @@ The shade starts at the collar's attachment boundary — the top outer edge of t
 
 Shade families implement the `ShadeGenerator` interface in `src/geometry/generators/types.ts` (defaults, parameter checks, summary, closed-solid build) and are registered in `registry.ts`. The assembly, validation and export paths are shared, so later families only add a generator and its controls.
 
+## Sculptural families (Phase 3)
+
+| Family | Controls | Notes |
+| --- | --- | --- |
+| **Twist** | twist angle, lobes, lobe depth, rotation, taper, curvature | Lobed cross-section rotating with height; the sampling grid rotates with it so ridges stay crisp. |
+| **Ripple** | wave count, amplitude, frequency, phase | Frequency 0 gives straight flutes; above 0 the flutes alternate with height for a quilted ripple. |
+| **Organic** | bulge, asymmetry, curvature, smoothness, seed | Seeded periodic harmonics (mulberry32): the same seed always rebuilds the same form. |
+| **Fold** | fold count, depth, sharpness, rotation | Segment count is a multiple of 2 × folds so every ridge and valley is a vertex column (crisp creases). |
+
+All four share one **radial-shell engine** (`src/geometry/generators/shell/engine.ts`). A family only supplies the outer radius r = F(θ, u); the engine:
+
+1. fits the form inside the maximum diameter (uniform radial scale, reported when it applies),
+2. blends it out of the collar over the transition height with a cosine ease, so the wall leaves the shoulder vertically and exactly flush,
+3. clamps pinched areas to a minimum printable radius,
+4. offsets the inner wall radially by t·√(1 + (∂r/r∂θ)² + (∂r/∂z)²) so the wall is t thick measured normal to the surface,
+5. sweeps outer wall, rim, inner wall and the overlap tab into one closed loop per angular column — watertight by construction,
+6. measures the thinnest wall (point-to-triangle), the steepest wall and the share of surface beyond the overhang limit.
+
+Because every height slice is a single loop around the axis and the inner radius is below the outer at every sample, the walls cannot cross by construction. Sampling density adapts to each pattern's curvature (chord error ≤ ¼ wall). The collar is revolved with the shade's segment count so the fused seam coincides exactly.
+
+**Guardrails.** Errors block export: diameter below the shoulder, wall below the printer minimum, a transition too short for the family, a measured wall below the minimum, or areas so steep the wall would thin below the minimum. Warnings: overhang share, envelope scaling, features too dense for the wall, ripples too fine to print.
+
+**Live preview.** Dragging shows a draft (shade and collar side by side, ~10–20 ms, labelled *Draft*). About ¼ s after you stop, a second worker builds the fused solid and validates it. Previews skip only the all-pairs self-intersection test; every export rebuilds at full resolution (~256k triangles) and runs every check, including self-intersection.
+
+**Adding a family:** add its parameters to `ShadeDesign` in `src/types/project.ts`, implement a `ShellFamily` (or a full `ShadeGenerator`), and register it in `registry.ts`. Controls, examples, thumbnails, validation and export come for free.
+
 ## Architecture
 
 ```
@@ -105,6 +135,7 @@ src/
     core/              MeshData, revolve, transforms
     collar/            collar parameters, derived dimensions, checks, cross-section
     generators/        shade generator interface, registry, cylinder family
+      shell/           radial-shell engine and the twist / ripple / organic / fold families
     kernel/            Manifold WASM wrapper
     validation/        mesh validation + self-intersection
     export/            binary STL writer / parser
@@ -118,7 +149,7 @@ src/
 
 Design rules:
 - The fabrication mesh is the source of truth. The viewport renders the same `MeshData` that is exported (only normals are added for shading).
-- Preview builds use 144 segments and 16 transition rows (~12k triangles, ~0.1 s in the worker); exports rebuild at 360 segments / 48 rows (~76k triangles) and re-validate.
+- Cylinder previews use 144 segments; sculptural previews ~120 segments × 3.5 mm rows (~33k triangles, ~0.15–0.2 s fused + validated, drafts ~10–20 ms). Exports rebuild at 360+ segments × 1.25 mm rows (~256k triangles, a few seconds) and re-validate.
 - Project data is versioned (`schemaVersion: 1`) with reserved fields for shades, lighting, WLED presets and physical shade identification.
 
 ## Testing
@@ -132,7 +163,9 @@ Design rules:
 - Exported STL re-parses to a watertight mesh with the same volume, accepted by Manifold.
 - Shade generator: 9" / 5" defaults, valid cross-sections, flush start radius, wall thickness normal to the surface, parameter errors and overhang warnings.
 - Assembly: one watertight genus-1 solid passing every check; exact volume for a straight cylinder; collar unchanged as shade parameters vary; maximum diameter respected; collar features still valid; STL round-trip; build-volume overflow and bad parameters are fatal.
-- Project JSON round-trips, partial files are filled with defaults, and Phase 1 projects (`shade: null`) migrate with their collar settings intact.
+- Families: every family's defaults and examples build a single valid solid; full fabrication validation (incl. self-intersection) passes; the envelope and height are respected; the collar is untouched; builds are deterministic; organic seeds reproduce; fold creases land on vertex columns; impossible forms are flagged.
+- A randomized sweep per family checks that any parameters either get flagged or produce a mesh that is watertight, self-intersection-free and inside the envelope.
+- Project JSON round-trips, partial files are filled with defaults, Phase 1 projects (`shade: null`) and Phase 2 projects (dimensions inside `cylinder`) migrate with collar and shade settings intact.
 
 Still to test by hand: touch gestures on a physical iPad, and opening exports in Bambu Studio. Always check an STL in your slicer before printing.
 

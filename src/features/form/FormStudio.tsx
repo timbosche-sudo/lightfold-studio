@@ -1,13 +1,16 @@
+import { useMemo } from 'react';
 import { useProjectStore } from '../../state/projectStore';
 import { useViewStore } from '../../state/viewStore';
 import { useGeometryStore } from '../../state/geometryStore';
 import { deriveCollarDimensions } from '../../geometry/collar/collar';
 import { PRINT_PRESETS } from '../../geometry/presets';
 import { shadeContext } from '../../geometry/buildPart';
-import { cylinderShade } from '../../geometry/generators/cylinder';
+import { FAMILY_ORDER, SHADE_GENERATORS, shadeFor } from '../../geometry/generators/registry';
 import { formatLength } from '../../utils/units';
-import { LengthField, Readout, Section, Segmented } from '../../components/controls/controls';
-import type { TransitionProfile } from '../../types/project';
+import { LengthField, Readout, Section } from '../../components/controls/controls';
+import type { ShadeDesign, ShadeFamilyId } from '../../types/project';
+import { FamilySketch } from './FamilySketch';
+import { FamilyControls, varyParams } from './FamilyControls';
 
 /** Approximate density for a solid-printed PLA estimate (g/cm³). */
 const PLA_DENSITY = 1.24;
@@ -18,27 +21,44 @@ export function FormStudio() {
   const units = useProjectStore((s) => s.project.units);
   const locked = useProjectStore((s) => s.project.collarLocked);
   const printer = useProjectStore((s) => s.project.fabrication.printer);
-  const preset = useProjectStore((s) => PRINT_PRESETS[s.project.fabrication.materialPreset]);
-  const update = useProjectStore((s) => s.updateCylinderShade);
+  const presetId = useProjectStore((s) => s.project.fabrication.materialPreset);
+  const updateCommon = useProjectStore((s) => s.updateShadeCommon);
+  const updateFamily = useProjectStore((s) => s.updateFamily);
+  const setFamily = useProjectStore((s) => s.setFamily);
   const view = useViewStore();
   const result = useGeometryStore((s) => s.result);
 
-  const p = shade.cylinder;
+  const preset = PRINT_PRESETS[presetId];
+  const ctx = useMemo(() => shadeContext(collar, preset), [collar, preset]);
   const d = deriveCollarDimensions(collar);
-  const ctx = shadeContext(collar, preset);
-  const issues = cylinderShade.check(p, ctx);
-  const summary = cylinderShade.summarize(p, ctx);
+  const family = shade.family;
+  const { generator, params } = shadeFor(shade, family);
+  const issues = useMemo(() => generator.check(params, ctx), [generator, params, ctx]);
+  const summary = useMemo(() => generator.summarize(params, ctx), [generator, params, ctx]);
+  const c = shade.common;
   const bad = (field: string) => issues.some((i) => i.field === field && i.severity === 'error');
   const fmt = (mm: number) => formatLength(mm, units);
   const maxPrintable = Math.min(printer.buildVolume[0], printer.buildVolume[1]) - 2 * printer.safetyMargin;
   const maxHeight = printer.buildVolume[2] - 2 * printer.safetyMargin - d.totalHeight;
-  const assemblyShown = view.part === 'assembly' && result?.shade;
+  const familyValues = shade[family] as unknown as Record<string, unknown>;
+  const setFamilyValue = (key: string, value: number | string) => updateFamily(family, { [key]: value } as never);
+  const live = view.part === 'assembly' && result?.shade && !result.draft ? result : null;
+
+  const selectFamily = (f: ShadeFamilyId) => {
+    setFamily(f);
+    // Sculpted families need room to grow out of the collar.
+    const need = SHADE_GENERATORS[f].minTransitionHeight;
+    if (c.transitionHeight < need) updateCommon({ transitionHeight: need });
+    view.showPart('assembly');
+  };
+
+  const applyExample = (params: Partial<ShadeDesign[ShadeFamilyId]>) => updateFamily(family, params as never);
 
   return (
     <div className="workspace">
       <header className="ws-head">
         <h2>Form Studio</h2>
-        <span className="phase-tag">Family: Cylinder</span>
+        <span className="phase-tag">{generator.label}</span>
       </header>
 
       {view.part !== 'assembly' ? (
@@ -48,6 +68,16 @@ export function FormStudio() {
         </div>
       ) : null}
 
+      <div className="family-picker" role="radiogroup" aria-label="Shade family">
+        {FAMILY_ORDER.map((f) => (
+          <button key={f} type="button" role="radio" aria-checked={family === f} className={`family-card ${family === f ? 'active' : ''}`} onClick={() => selectFamily(f)}>
+            <FamilySketch design={shade} family={f} ctx={ctx} width={62} height={46} />
+            <span>{SHADE_GENERATORS[f].label}</span>
+          </button>
+        ))}
+      </div>
+      <p className="family-desc">{generator.description}</p>
+
       {issues.length > 0 ? (
         <ul className="issue-list">
           {issues.map((i, n) => (
@@ -56,97 +86,66 @@ export function FormStudio() {
         </ul>
       ) : null}
 
-      <Section title="Shade dimensions">
-        <LengthField
-          label="Shade height"
-          value={p.height}
-          min={10}
-          max={Math.max(maxHeight, p.height)}
-          step={0.5}
-          invalid={bad('height')}
-          onChange={(height) => update({ height })}
-          hint="Above the collar"
-        />
-        <LengthField
-          label="Overall height"
-          value={p.height + d.totalHeight}
-          min={d.totalHeight + 10}
-          max={Math.max(maxHeight, p.height) + d.totalHeight}
-          step={0.5}
-          onChange={(v) => update({ height: v - d.totalHeight })}
-          hint="Collar + shade"
-        />
-        <LengthField
-          label="Maximum diameter"
-          value={p.maxDiameter}
-          min={d.shoulderOuterRadius * 2}
-          max={Math.max(maxPrintable, p.maxDiameter)}
-          step={0.5}
-          invalid={bad('maxDiameter')}
-          onChange={(maxDiameter) => update({ maxDiameter })}
-          hint="Body outside ⌀"
-        />
-        <button type="button" className="btn small ghost" onClick={() => update({ maxDiameter: d.shoulderOuterRadius * 2 })}>
-          Match shoulder (straight cylinder)
-        </button>
-        <LengthField
-          label="Wall thickness"
-          value={p.wallThickness}
-          min={0.4}
-          max={Math.max(4, p.wallThickness)}
-          step={0.05}
-          invalid={bad('wallThickness')}
-          onChange={(wallThickness) => update({ wallThickness })}
-          hint={`Min ${preset.minWall} mm · rec. ${preset.recommendedWall} mm`}
-        />
-      </Section>
-
-      <Section title="Base transition">
-        <p className="note">How the wall moves from the collar shoulder (⌀ {fmt(d.shoulderOuterRadius * 2)}) out to the body diameter.</p>
-        <LengthField
-          label="Transition height"
-          value={p.transitionHeight}
-          min={0}
-          max={Math.max(p.height, 1)}
-          step={0.5}
-          invalid={bad('transitionHeight')}
-          onChange={(transitionHeight) => update({ transitionHeight })}
-        />
-        <div className="field">
-          <div className="field-head"><label>Profile</label></div>
-          <Segmented<TransitionProfile>
-            value={p.transitionProfile}
-            label="Transition profile"
-            options={[
-              { value: 'smooth', label: 'Smooth' },
-              { value: 'linear', label: 'Linear' },
-            ]}
-            onChange={(transitionProfile) => update({ transitionProfile })}
-          />
+      <Section title="Examples">
+        <div className="example-strip">
+          {generator.examples.map((ex) => {
+            const exDesign = { ...shade, [family]: { ...(shade[family] as object), ...ex.params } } as ShadeDesign;
+            return (
+              <button key={ex.name} type="button" className="example-card" onClick={() => applyExample(ex.params)}>
+                <FamilySketch design={exDesign} family={family} ctx={ctx} width={64} height={46} />
+                <span>{ex.name}</span>
+              </button>
+            );
+          })}
         </div>
-        <Readout label="Steepest wall angle" value={`${summary.maxOverhangDeg.toFixed(1)}° from vertical (limit ${preset.maxOverhangDeg}°)`} />
       </Section>
 
-      <Section title="Summary">
+      <Section title="Sculpt">
+        {generator.controls.length > 1 ? (
+          <div className="btn-row compact sculpt-actions">
+            <button type="button" className="btn small" onClick={() => updateFamily(family, varyParams(generator.controls, familyValues) as never)}>Vary</button>
+            <button type="button" className="btn small ghost" onClick={() => updateFamily(family, generator.defaults() as never)}>Reset {generator.label.toLowerCase()}</button>
+          </div>
+        ) : null}
+        <FamilyControls controls={generator.controls} values={familyValues} invalid={bad} onChange={setFamilyValue} />
+      </Section>
+
+      <Section title="Dimensions">
+        <LengthField label="Shade height" value={c.height} min={20} max={Math.max(maxHeight, c.height)} step={0.5} invalid={bad('height')} onChange={(height) => updateCommon({ height })} hint="Above the collar" />
+        <LengthField label="Overall height" value={c.height + d.totalHeight} min={d.totalHeight + 20} max={Math.max(maxHeight, c.height) + d.totalHeight} step={0.5} onChange={(v) => updateCommon({ height: v - d.totalHeight })} hint="Collar + shade" />
+        <LengthField label="Maximum diameter" value={c.maxDiameter} min={d.shoulderOuterRadius * 2} max={Math.max(maxPrintable, c.maxDiameter)} step={0.5} invalid={bad('maxDiameter')} onChange={(maxDiameter) => updateCommon({ maxDiameter })} hint="Envelope — the form never exceeds it" />
+        {family === 'cylinder' ? (
+          <button type="button" className="btn small ghost" onClick={() => updateCommon({ maxDiameter: d.shoulderOuterRadius * 2 })}>Match shoulder (straight cylinder)</button>
+        ) : null}
+        <LengthField label="Wall thickness" value={c.wallThickness} min={0.4} max={Math.max(4, c.wallThickness)} step={0.05} invalid={bad('wallThickness')} onChange={(wallThickness) => updateCommon({ wallThickness })} hint={`Min ${preset.minWall} mm · rec. ${preset.recommendedWall} mm`} />
+        <LengthField label="Transition height" value={c.transitionHeight} min={0} max={Math.max(c.height, 1)} step={0.5} invalid={bad('transitionHeight')} onChange={(transitionHeight) => updateCommon({ transitionHeight })} hint={generator.minTransitionHeight ? `Grows out of the collar · min ${generator.minTransitionHeight} mm` : 'Grows out of the collar'} />
+      </Section>
+
+      <Section title="Fabrication insight">
         <Readout label="Overall size" value={`⌀ ${fmt(summary.envelopeRadius * 2)} × ${fmt(summary.topZ)}`} />
         <Readout label="Top opening" value={`⌀ ${fmt(summary.topOpeningDiameter)}`} />
-        <Readout label="Attachment" value={`⌀ ${fmt(d.attachment.radius * 2)} at ${fmt(d.attachment.z)}`} />
+        <Readout
+          label="Steepest wall"
+          value={`${summary.maxOverhangDeg.toFixed(0)}° from vertical${summary.overhangFraction ? ` · ${(summary.overhangFraction * 100).toFixed(1)}% > ${preset.maxOverhangDeg}°` : ''}`}
+        />
+        {summary.envelopeScale !== undefined && summary.envelopeScale < 0.999 ? <Readout label="Fitted to envelope" value={`scaled to ${(summary.envelopeScale * 100).toFixed(0)}%`} /> : null}
         <Readout label="Collar" value={locked ? 'Locked (calibrated)' : 'Editable in Fabrication'} />
-        {assemblyShown ? (
+        {live ? (
           <>
-            <Readout label="Solid volume" value={`${(result.report.stats.volume / 1000).toFixed(1)} cm³`} />
-            <Readout label="Material if printed solid" value={`≈ ${((result.report.stats.volume / 1000) * PLA_DENSITY).toFixed(0)} g PLA`} />
+            {live.shade?.minWallEstimate !== undefined ? <Readout label="Thinnest wall (measured)" value={fmt(live.shade.minWallEstimate)} /> : null}
+            <Readout label="Solid volume" value={`${(live.report.stats.volume / 1000).toFixed(1)} cm³ · ≈ ${((live.report.stats.volume / 1000) * PLA_DENSITY).toFixed(0)} g PLA if solid`} />
             <Readout
               label="Validation (preview)"
-              value={result.report.fatal ? `${result.report.checks.filter((c) => c.status === 'error').length} fatal issue(s)` : result.report.warningCount ? `Valid · ${result.report.warningCount} warning(s)` : 'Valid printable solid'}
+              value={live.report.fatal ? `${live.report.checks.filter((x) => x.status === 'error').length} fatal issue(s)` : live.report.warningCount ? `Valid · ${live.report.warningCount} warning(s)` : 'Valid printable solid'}
             />
           </>
-        ) : null}
+        ) : (
+          <Readout label="Validation" value="Updating…" />
+        )}
         <div className="btn-row">
           <button type="button" className="btn" onClick={() => view.set({ workspace: 'fabrication' })}>Collar & export…</button>
-          <button type="button" className="btn ghost" onClick={() => update(cylinderShade.defaults())}>Reset shade</button>
         </div>
-        <p className="note">The material estimate assumes a fully solid wall; your slicer's figure will differ. Crumpled, twisted, louvered and other families arrive in Phases 3–4.</p>
+        <p className="note">Every export is rebuilt at full resolution and re-checked, including the self-intersection test. The material estimate assumes a solid wall.</p>
       </Section>
     </div>
   );

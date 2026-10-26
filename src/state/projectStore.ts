@@ -9,7 +9,8 @@ import type {
   Project,
   Revision,
   ShadeDesign,
-  CylinderShadeParams,
+  ShadeCommonParams,
+  ShadeFamilyId,
 } from '../types/project';
 import { contentOf, newProject, uid } from '../services/projectFactory';
 
@@ -27,7 +28,9 @@ interface ProjectStore {
   forceCollar: (patch: Partial<CollarParams>) => void;
   setCollarLocked: (locked: boolean) => void;
   /** Shade edits never touch the collar, so they are allowed while it is locked. */
-  updateCylinderShade: (patch: Partial<CylinderShadeParams>) => void;
+  updateShadeCommon: (patch: Partial<ShadeCommonParams>) => void;
+  updateFamily: <K extends Exclude<ShadeFamilyId, never>>(family: K, patch: Partial<ShadeDesign[K]>) => void;
+  setFamily: (family: ShadeFamilyId) => void;
   setShade: (shade: ShadeDesign) => void;
   updateCalibration: (patch: Partial<CalibrationState>) => void;
   updateFitTest: (patch: Partial<FitTestParams>) => void;
@@ -61,7 +64,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     },
     forceCollar: (patch) => edit((p) => ({ collar: { ...p.collar, ...patch } })),
     setCollarLocked: (collarLocked) => edit(() => ({ collarLocked })),
-    updateCylinderShade: (patch) => edit((p) => ({ shade: { ...p.shade, cylinder: { ...p.shade.cylinder, ...patch } } })),
+    updateShadeCommon: (patch) => edit((p) => ({ shade: { ...p.shade, common: { ...p.shade.common, ...patch } } })),
+    updateFamily: (family, patch) => edit((p) => ({ shade: { ...p.shade, [family]: { ...p.shade[family], ...patch } } })),
+    setFamily: (family) => edit((p) => ({ shade: { ...p.shade, family } })),
     setShade: (shade) => edit(() => ({ shade })),
     updateCalibration: (patch) => edit((p) => ({ calibration: { ...p.calibration, ...patch } })),
     updateFitTest: (patch) =>

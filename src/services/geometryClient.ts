@@ -2,31 +2,43 @@ import type { BuildJob, BuildResult } from '../geometry/buildPart';
 import type { WorkerRequest, WorkerResponse } from '../workers/protocol';
 
 /**
- * Runs geometry builds in a Web Worker so mesh generation, Booleans and
- * validation never block the UI thread.
+ * Lanes are separate Web Workers so a fast draft never waits behind a full
+ * union + validation:
+ * - `interactive`: draft previews while the user drags.
+ * - `full`: validated previews and exports.
  */
-class GeometryClient {
+export type Lane = 'interactive' | 'full';
+
+interface Pending {
+  resolve: (r: BuildResult | null) => void;
+  reject: (e: Error) => void;
+}
+
+class LaneWorker {
   private worker: Worker | null = null;
   private nextId = 1;
-  private pending = new Map<number, { resolve: (r: BuildResult) => void; reject: (e: Error) => void }>();
-  private latestByChannel = new Map<string, number>();
+  private inflight = new Map<number, { resolve: (r: BuildResult) => void; reject: (e: Error) => void }>();
+  /** Coalesced requests: at most one waiting job per channel; newer ones replace it. */
+  private waiting = new Map<string, { job: BuildJob; pending: Pending }>();
 
-  private ensureWorker(): Worker {
+  private ensure(): Worker {
     if (!this.worker) {
       this.worker = new Worker(new URL('../workers/geometry.worker.ts', import.meta.url), { type: 'module' });
       this.worker.onmessage = (ev: MessageEvent<WorkerResponse>) => {
         const msg = ev.data;
-        const p = this.pending.get(msg.id);
+        const p = this.inflight.get(msg.id);
         if (!p) return;
-        this.pending.delete(msg.id);
+        this.inflight.delete(msg.id);
         if (msg.ok) p.resolve(msg.result);
         else p.reject(new Error(msg.error));
+        this.flush();
       };
       this.worker.onerror = (ev) => {
-        for (const p of this.pending.values()) p.reject(new Error(ev.message || 'Geometry worker crashed'));
-        this.pending.clear();
+        for (const p of this.inflight.values()) p.reject(new Error(ev.message || 'Geometry worker crashed'));
+        this.inflight.clear();
         this.worker?.terminate();
         this.worker = null;
+        this.flush();
       };
     }
     return this.worker;
@@ -34,23 +46,48 @@ class GeometryClient {
 
   build(job: BuildJob): Promise<BuildResult> {
     const id = this.nextId++;
-    const worker = this.ensureWorker();
+    const worker = this.ensure();
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.inflight.set(id, { resolve, reject });
       const req: WorkerRequest = { id, job };
       worker.postMessage(req);
     });
   }
 
   /**
-   * Latest-wins build: resolves null if a newer request on the same channel
-   * was issued before this one finished (e.g. during slider drags).
+   * Latest-wins: if the worker is busy, the job waits; a newer job on the same
+   * channel replaces it (the replaced promise resolves null), so rapid slider
+   * moves never pile up stale builds.
    */
-  async buildLatest(channel: string, job: BuildJob): Promise<BuildResult | null> {
-    const ticket = this.nextId;
-    this.latestByChannel.set(channel, ticket);
-    const result = await this.build(job);
-    return this.latestByChannel.get(channel) === ticket ? result : null;
+  buildCoalesced(channel: string, job: BuildJob): Promise<BuildResult | null> {
+    return new Promise((resolve, reject) => {
+      const prev = this.waiting.get(channel);
+      if (prev) prev.pending.resolve(null);
+      this.waiting.set(channel, { job, pending: { resolve, reject } });
+      this.flush();
+    });
+  }
+
+  private flush() {
+    if (this.inflight.size > 0) return;
+    const next = this.waiting.entries().next();
+    if (next.done) return;
+    const [channel, { job, pending }] = next.value;
+    this.waiting.delete(channel);
+    this.build(job).then(pending.resolve, pending.reject);
+  }
+}
+
+class GeometryClient {
+  private lanes: Record<Lane, LaneWorker> = { interactive: new LaneWorker(), full: new LaneWorker() };
+
+  /** One-off build (exports) on the full lane. */
+  build(job: BuildJob): Promise<BuildResult> {
+    return this.lanes.full.build(job);
+  }
+
+  buildCoalesced(lane: Lane, channel: string, job: BuildJob): Promise<BuildResult | null> {
+    return this.lanes[lane].buildCoalesced(channel, job);
   }
 }
 

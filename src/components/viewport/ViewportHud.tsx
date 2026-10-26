@@ -14,7 +14,8 @@ export function ViewportHud() {
   const fitIndex = useViewStore((s) => s.fitTestIndex);
   const showBase = useViewStore((s) => s.showBase);
 
-  const shade = useProjectStore((s) => s.project.shade.cylinder);
+  const shade = useProjectStore((s) => s.project.shade.common);
+  const family = useProjectStore((s) => s.project.shade.family);
   const errors = result?.report.checks.filter((c) => c.status === 'error').length ?? 0;
   const warnings = result?.report.checks.filter((c) => c.status === 'warning').length ?? 0;
   const clearance = part === 'fit-test' ? calibration.testClearances[Math.min(fitIndex, calibration.testClearances.length - 1)] : collar.fitClearance;
@@ -29,13 +30,15 @@ export function ViewportHud() {
           <span className="badge">Loading geometry kernel…</span>
         ) : errors ? (
           <span className="badge error">{errors} fatal issue{errors > 1 ? 's' : ''}</span>
+        ) : result.draft ? (
+          <span className="badge subtle">Draft · validating when you pause</span>
         ) : (
           <span className="badge ok">Valid solid{warnings ? ` · ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}</span>
         )}
         {building ? <span className="badge subtle">updating…</span> : null}
         <span className="badge subtle">
-          {part === 'fit-test' ? `Fit-test ring #${fitIndex + 1}` : part === 'collar' ? 'Collar' : 'Lampshade assembly'}
-          {result ? ` · ${result.report.stats.triangles.toLocaleString()} tris · preview` : ''}
+          {part === 'fit-test' ? `Fit-test ring #${fitIndex + 1}` : part === 'collar' ? 'Collar' : `Lampshade · ${family}`}
+          {result ? ` · ${result.report.stats.triangles.toLocaleString()} tris · ${result.draft ? 'draft' : 'preview'}` : ''}
         </span>
       </div>
       {showDims && result ? (

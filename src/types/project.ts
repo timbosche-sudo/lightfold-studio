@@ -68,30 +68,88 @@ export interface PrinterProfile {
   safetyMargin: number;
 }
 
-export type ShadeFamilyId = 'cylinder';
+export type ShadeFamilyId = 'cylinder' | 'twist' | 'ripple' | 'organic' | 'fold';
 
 export type TransitionProfile = 'smooth' | 'linear';
 
-/** Phase 2 basic shade: a shell that flares from the shoulder OD to a body diameter. */
-export interface CylinderShadeParams {
+/** Dimensions shared by every shade family; kept when switching families. */
+export interface ShadeCommonParams {
   /** Height of the shade above the collar attachment boundary. */
   height: number;
-  /** Outside diameter of the cylindrical body (the shade's maximum diameter). */
+  /** Outside envelope diameter: no part of the shade may exceed it. */
   maxDiameter: number;
   /** Wall thickness measured normal to the surface. */
   wallThickness: number;
-  /** Height over which the wall moves from the shoulder OD to the body diameter. */
+  /** Height over which the form grows out of the collar shoulder. */
   transitionHeight: number;
+}
+
+export interface CylinderFamilyParams {
   transitionProfile: TransitionProfile;
 }
 
+/** Full parameter set seen by the cylinder generator. */
+export type CylinderShadeParams = ShadeCommonParams & CylinderFamilyParams;
+
+export interface TwistParams {
+  /** Total rotation of the cross-section from base to top, degrees. */
+  twistAngle: number;
+  /** Starting orientation of the lobes, degrees. */
+  rotation: number;
+  lobes: number;
+  /** Radial depth between lobe crest and valley, mm. */
+  lobeDepth: number;
+  /** Fractional radius reduction at the top (negative flares outward). */
+  taper: number;
+  /** Silhouette bow: positive = barrel, negative = waisted. */
+  curvature: number;
+}
+
+export interface RippleParams {
+  /** Number of flutes around the circumference. */
+  waveCount: number;
+  /** Radial flute depth, mm. */
+  amplitude: number;
+  /** Vertical ripple waves along the height (0 = straight flutes). */
+  frequency: number;
+  /** Phase of the vertical ripple, degrees. */
+  phase: number;
+}
+
+export interface OrganicParams {
+  /** Outward swelling of the silhouette, mm. */
+  bulge: number;
+  /** Strength of the seeded, non-symmetric flow (0–1). */
+  asymmetry: number;
+  /** Moves the bulge down (negative) or up (positive). */
+  curvature: number;
+  /** 1 = long gentle undulations, 0 = busier lumps. */
+  smoothness: number;
+  seed: number;
+}
+
+export interface FoldParams {
+  foldCount: number;
+  /** Radial depth from ridge to valley, mm. */
+  depth: number;
+  /** 0 = soft rounded folds, 1 = crisp creases. */
+  sharpness: number;
+  /** How far the pleats rotate from base to top, degrees. */
+  rotation: number;
+}
+
 /**
- * The shade design. Parameters are kept per family so switching families
- * (Phase 3+) does not discard earlier settings.
+ * The shade design. Family parameters are kept per family so switching
+ * families never discards earlier settings.
  */
 export interface ShadeDesign {
   family: ShadeFamilyId;
-  cylinder: CylinderShadeParams;
+  common: ShadeCommonParams;
+  cylinder: CylinderFamilyParams;
+  twist: TwistParams;
+  ripple: RippleParams;
+  organic: OrganicParams;
+  fold: FoldParams;
 }
 
 export type MaterialPresetId = 'pla-0.4' | 'petg-0.4' | 'pla-0.2';

@@ -1,7 +1,8 @@
 import type { Project, ProjectContent } from '../types/project';
 import { defaultCollarParams } from '../geometry/collar/collar';
 import { BAMBU_P1S } from '../geometry/presets';
-import { defaultShadeDesign } from '../geometry/generators/registry';
+import { defaultShadeDesign, FAMILY_ORDER } from '../geometry/generators/registry';
+import type { ShadeDesign, ShadeFamilyId } from '../types/project';
 
 export function uid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
@@ -57,6 +58,49 @@ export function contentOf(p: Project): ProjectContent {
   };
 }
 
+const COMMON_KEYS = ['height', 'maxDiameter', 'wallThickness', 'transitionHeight'] as const;
+
+/**
+ * Normalise a stored shade design:
+ * - Phase 1 stored `shade: null` → defaults.
+ * - Phase 2 stored the shared dimensions inside `cylinder` → moved to `common`.
+ * - Missing families or fields → defaults; non-finite numbers → rejected.
+ */
+export function normalizeShade(raw: unknown): ShadeDesign {
+  const d = defaultShadeDesign();
+  if (!raw || typeof raw !== 'object') return d;
+  const r = raw as Record<string, Record<string, unknown> | string | undefined>;
+  const legacy = (typeof r.cylinder === 'object' ? r.cylinder : {}) as Record<string, unknown>;
+  const common = { ...d.common };
+  for (const k of COMMON_KEYS) {
+    const v = (r.common as Record<string, unknown> | undefined)?.[k] ?? legacy[k];
+    if (typeof v === 'number') common[k] = v;
+  }
+  const merge = <T extends object>(def: T, src: unknown): T => {
+    const out = { ...def } as Record<string, unknown>;
+    if (src && typeof src === 'object') {
+      for (const [k, v] of Object.entries(src)) if (k in def && typeof v === typeof out[k]) out[k] = v;
+    }
+    return out as T;
+  };
+  const family = FAMILY_ORDER.includes(r.family as ShadeFamilyId) ? (r.family as ShadeFamilyId) : 'cylinder';
+  const shade: ShadeDesign = {
+    family,
+    common,
+    cylinder: { transitionProfile: legacy.transitionProfile === 'linear' ? 'linear' : 'smooth' },
+    twist: merge(d.twist, r.twist),
+    ripple: merge(d.ripple, r.ripple),
+    organic: merge(d.organic, r.organic),
+    fold: merge(d.fold, r.fold),
+  };
+  for (const group of [shade.common, shade.twist, shade.ripple, shade.organic, shade.fold]) {
+    for (const [k, v] of Object.entries(group)) {
+      if (typeof v === 'number' && !Number.isFinite(v)) throw new Error(`Invalid shade value for ${k}.`);
+    }
+  }
+  return shade;
+}
+
 /**
  * Accept a project from JSON (import or storage), filling any fields missing
  * from older or partial files with defaults. Throws on unusable input.
@@ -71,7 +115,7 @@ export function normalizeProject(raw: unknown): Project {
   collar.retentionLip = { ...d.collar.retentionLip, ...(r.collar?.retentionLip ?? {}) };
   collar.alignmentKey = { ...d.collar.alignmentKey, ...(r.collar?.alignmentKey ?? {}) };
   collar.magnetPockets = { ...d.collar.magnetPockets, ...(r.collar?.magnetPockets ?? {}) };
-  for (const [k, v] of Object.entries({ ...collar, ...(r.shade?.cylinder ?? {}) })) {
+  for (const [k, v] of Object.entries(collar)) {
     if (typeof v === 'number' && !Number.isFinite(v)) throw new Error(`Invalid value for ${k}.`);
   }
   return {
@@ -83,7 +127,7 @@ export function normalizeProject(raw: unknown): Project {
     revisions: Array.isArray(r.revisions)
       ? r.revisions.map((rev) => ({
           ...rev,
-          content: { ...rev.content, shade: rev.content?.shade ? { ...d.shade, ...rev.content.shade, cylinder: { ...d.shade.cylinder, ...rev.content.shade.cylinder } } : defaultShadeDesign() },
+          content: { ...rev.content, shade: normalizeShade(rev.content?.shade) },
         }))
       : [],
     physicalTagId: r.physicalTagId ?? null,
@@ -100,11 +144,7 @@ export function normalizeProject(raw: unknown): Project {
       printer: { ...d.fabrication.printer, ...(r.fabrication?.printer ?? {}) },
       exportHistory: r.fabrication?.exportHistory ?? [],
     },
-    // Phase 1 projects stored `shade: null`; they receive the default shade.
-    shade: {
-      family: 'cylinder',
-      cylinder: { ...d.shade.cylinder, ...(r.shade?.cylinder ?? {}) },
-    },
+    shade: normalizeShade(r.shade),
     lighting: null,
     wledPresetId: r.wledPresetId ?? null,
   };

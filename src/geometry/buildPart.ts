@@ -1,6 +1,6 @@
 import type { CollarOrientation, CollarParams, FitTestParams, MaterialPresetId, PrinterProfile, ShadeDesign } from '../types/project';
 import type { MeshData } from './core/mesh';
-import { flipForPrinting } from './core/mesh';
+import { boundsSize, computeBounds, flipForPrinting } from './core/mesh';
 import { checkProfile, revolveProfile } from './core/revolve';
 import { checkCollarParams, collarProfile, deriveCollarDimensions, type ParamIssue } from './collar/collar';
 import type { Kernel } from './kernel/manifoldKernel';
@@ -12,9 +12,10 @@ import { activeShade } from './generators/registry';
 import type { ShadeContext, ShadeSummary } from './generators/types';
 import type { Manifold } from 'manifold-3d';
 
-export type Quality = 'preview' | 'fabrication';
+import { SEGMENTS, type Quality } from './core/quality';
+import type { ShadeBuildResult } from './generators/types';
 
-export const SEGMENTS: Record<Quality, number> = { preview: 144, fabrication: 360 };
+export { SEGMENTS, type Quality };
 
 export type PartJob =
   | { part: 'assembly'; collar: CollarParams; shade: ShadeDesign }
@@ -28,6 +29,12 @@ export interface BuildJob {
   orientation: CollarOrientation;
   printer: PrinterProfile;
   materialPreset: MaterialPresetId;
+  /**
+   * Assemblies only: display-only draft for live dragging. The shade and collar
+   * are shown side by side without the Boolean union or mesh validation; the
+   * full build replaces it as soon as editing pauses. Never used for export.
+   */
+  draft?: boolean;
 }
 
 export interface BuildResult {
@@ -35,6 +42,8 @@ export interface BuildResult {
   report: ValidationReport;
   /** Present for assemblies. */
   shade?: ShadeSummary;
+  /** True for a draft (not unioned, not validated) preview. */
+  draft?: boolean;
   timings: { buildMs: number; validateMs: number };
 }
 
@@ -111,11 +120,11 @@ function applyCollarFeatures(kernel: Kernel, keep: Keep, solid: Manifold, job: P
  * The Manifold kernel is required for assemblies and collar features.
  */
 export function buildPart(req: BuildJob, kernel: Kernel | null): BuildResult {
+  if (req.draft && req.job.part === 'assembly' && req.quality === 'preview') return buildDraft(req, req.job);
   const t0 = performance.now();
   const preset = PRINT_PRESETS[req.materialPreset];
   const { job } = req;
   const { collar, includeShoulder } = effectiveCollar(job);
-  const segments = SEGMENTS[req.quality];
   const d = deriveCollarDimensions(collar);
 
   const collarIssues = checkCollarParams(collar, preset.minWall, preset.recommendedWall);
@@ -132,9 +141,28 @@ export function buildPart(req: BuildJob, kernel: Kernel | null): BuildResult {
     message: profileProblems.length ? profileProblems.join(' ') : 'Cross-section is a simple closed polygon.',
   });
 
-  let mesh = revolveProfile(profile, segments);
+  // Assemblies build the shade first: the collar is revolved with the shade's
+  // angular segment count so the overlapping faces coincide exactly.
   let shadeSummary: ShadeSummary | undefined;
+  let shadeBuild: ShadeBuildResult | null = null;
+  if (job.part === 'assembly' && !profileProblems.length) {
+    const ctx = shadeContext(collar, preset);
+    const { generator, params } = activeShade(job.shade);
+    const shadeIssues = generator.check(params, ctx);
+    extra.push(...issueChecks('Shade parameters', 'shade-params', shadeIssues, `${generator.label} shade parameters are within limits.`));
+    try {
+      shadeBuild = generator.build(params, ctx, { quality: req.quality });
+      shadeSummary = shadeBuild.summary;
+      extra.push(...issueChecks('Shade form', 'shade-form', shadeBuild.issues, 'Measured wall, radius and overhang are within limits.'));
+    } catch (e) {
+      shadeSummary = generator.summarize(params, ctx);
+      extra.push({ id: 'shade-build', label: 'Shade geometry', status: 'error', message: (e as Error).message });
+    }
+  }
+  const segments = shadeBuild?.segments ?? SEGMENTS[req.quality];
+  let mesh = revolveProfile(profile, segments);
   let collarVolume: number | null = null;
+  let kernelProduced = false;
 
   const needsKernel =
     job.part === 'assembly' ||
@@ -146,19 +174,7 @@ export function buildPart(req: BuildJob, kernel: Kernel | null): BuildResult {
     if (!kernel) {
       extra.push({ id: 'kernel-required', label: 'Geometry kernel', status: 'error', message: 'Manifold kernel unavailable; shade union and collar features could not be built.' });
     } else {
-      let shadeMesh: MeshData | null = null;
-      if (job.part === 'assembly') {
-        const ctx = shadeContext(collar, preset);
-        const { generator, params } = activeShade(job.shade);
-        shadeSummary = generator.summarize(params, ctx);
-        const shadeIssues = generator.check(params, ctx);
-        extra.push(...issueChecks('Shade parameters', 'shade-params', shadeIssues, `${generator.label} shade parameters are within limits.`));
-        try {
-          shadeMesh = generator.build(params, ctx, { segments, quality: req.quality });
-        } catch (e) {
-          extra.push({ id: 'shade-build', label: 'Shade geometry', status: 'error', message: (e as Error).message });
-        }
-      }
+      const shadeMesh: MeshData | null = shadeBuild?.mesh ?? null;
       try {
         mesh = withScope((keep) => {
           let collarSolid = keep(toManifold(kernel, mesh));
@@ -182,6 +198,7 @@ export function buildPart(req: BuildJob, kernel: Kernel | null): BuildResult {
           }
           const status = solid.status();
           if (status !== 'NoError') throw new Error(status);
+          kernelProduced = true;
           return fromManifold(solid);
         });
         extra.push({
@@ -205,6 +222,13 @@ export function buildPart(req: BuildJob, kernel: Kernel | null): BuildResult {
     buildVolume: req.printer.buildVolume,
     safetyMargin: req.printer.safetyMargin,
     extraChecks: extra,
+    // Sculpted assemblies are large; the all-pairs triangle test runs on every
+    // export, while live previews rely on the shell's construction guarantee.
+    kernelVerified: req.quality === 'preview' && kernelProduced,
+    skipSelfIntersection:
+      job.part === 'assembly' && req.quality === 'preview'
+        ? 'Checked on export. Preview shells are built so their walls cannot cross.'
+        : undefined,
   });
   const t2 = performance.now();
   return { mesh, report, shade: shadeSummary, timings: { buildMs: t1 - t0, validateMs: t2 - t1 } };
@@ -244,4 +268,57 @@ function assemblyChecks(mesh: MeshData, attachment: { z: number; radius: number 
           : `Shade reaches ⌀ ${(rAbove * 2).toFixed(2)} mm, outside the ${(shade.envelopeRadius * 2).toFixed(2)} mm envelope.`,
     },
   ];
+}
+
+/** Draft assembly: shade (no tab) + collar concatenated for display while dragging. */
+function buildDraft(req: BuildJob, job: Extract<PartJob, { part: 'assembly' }>): BuildResult {
+  const t0 = performance.now();
+  const preset = PRINT_PRESETS[req.materialPreset];
+  const collar = job.collar;
+  const ctx = shadeContext(collar, preset);
+  const { generator, params } = activeShade(job.shade);
+  const checks: ValidationCheck[] = [
+    ...issueChecks('Collar parameters', 'params', checkCollarParams(collar, preset.minWall, preset.recommendedWall), 'All collar parameters are within limits.'),
+    ...issueChecks('Shade parameters', 'shade-params', generator.check(params, ctx), `${generator.label} shade parameters are within limits.`),
+  ];
+  let shade: ShadeBuildResult | null = null;
+  try {
+    shade = generator.build(params, ctx, { quality: 'preview', draft: true });
+    checks.push(...issueChecks('Shade form', 'shade-form', shade.issues, 'Radius and overhang are within limits.'));
+  } catch (e) {
+    checks.push({ id: 'shade-build', label: 'Shade geometry', status: 'error', message: (e as Error).message });
+  }
+  checks.push({ id: 'draft', label: 'Draft preview', status: 'skipped', message: 'Showing a fast draft while you edit; the fused solid is built and validated when you pause.' });
+  const collarMesh = revolveProfile(collarProfile(collar), shade?.segments ?? SEGMENTS.preview);
+  const parts = shade ? [collarMesh, shade.mesh] : [collarMesh];
+  const positions = new Float32Array(parts.reduce((n, m) => n + m.positions.length, 0));
+  const indices = new Uint32Array(parts.reduce((n, m) => n + m.indices.length, 0));
+  let vo = 0, io = 0;
+  for (const m of parts) {
+    positions.set(m.positions, vo);
+    for (let i = 0; i < m.indices.length; i++) indices[io + i] = m.indices[i] + vo / 3;
+    vo += m.positions.length;
+    io += m.indices.length;
+  }
+  const mesh = { positions, indices };
+  const bounds = computeBounds(mesh);
+  const report: ValidationReport = {
+    checks,
+    fatal: checks.some((c) => c.status === 'error'),
+    warningCount: checks.filter((c) => c.status === 'warning').length,
+    stats: {
+      vertices: positions.length / 3,
+      triangles: indices.length / 3,
+      edges: 0,
+      volume: 0,
+      surfaceArea: 0,
+      components: parts.length,
+      genus: null,
+      bounds,
+      size: boundsSize(bounds),
+    },
+    problemEdges: new Float32Array(),
+    problemPoints: new Float32Array(),
+  };
+  return { mesh, report, shade: shade?.summary ?? generator.summarize(params, ctx), draft: true, timings: { buildMs: performance.now() - t0, validateMs: 0 } };
 }
