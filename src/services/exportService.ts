@@ -26,6 +26,10 @@ function jobFor(project: Project, job: PartJob): BuildJob {
 
 const fmt = (n: number) => n.toFixed(2).replace(/\.?0+$/, '');
 
+export function assemblyFilename(project: Project, diagnostic: boolean): string {
+  return `LightFold_${slugify(project.name)}_Assembly${diagnostic ? '_DIAGNOSTIC' : ''}.stl`;
+}
+
 export function collarFilename(project: Project, diagnostic: boolean): string {
   return `LightFold_${slugify(project.name)}_Collar${diagnostic ? '_DIAGNOSTIC' : ''}.stl`;
 }
@@ -36,6 +40,20 @@ export function fitTestFilename(project: Project, clearance: number, height: num
 
 function header(project: Project, what: string): string {
   return `LightFold Studio | ${project.name} | ${what} | mm`;
+}
+
+/**
+ * Complete printable lampshade: shade fused to the collar as one solid,
+ * oriented as installed (collar on the build plate).
+ */
+export async function exportAssembly(project: Project, diagnostic: boolean): Promise<ExportOutcome> {
+  const result = await geometryClient.build(jobFor(project, { part: 'assembly', collar: project.collar, shade: project.shade }));
+  if (result.report.fatal && !diagnostic) {
+    return { ok: false, result, message: 'Export blocked: the lampshade has fatal geometry errors. See the validation report.' };
+  }
+  const filename = assemblyFilename(project, diagnostic && result.report.fatal);
+  const download = downloadBlob(writeBinaryStl(result.mesh, header(project, 'Shade + collar')), filename, 'model/stl');
+  return { ok: true, filename, result, download, message: `Exported ${filename}` };
 }
 
 /**

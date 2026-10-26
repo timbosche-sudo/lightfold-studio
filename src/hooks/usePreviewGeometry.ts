@@ -10,6 +10,7 @@ const DEBOUNCE_MS = 70;
 /** Rebuilds the preview mesh (in the worker) whenever relevant parameters change. */
 export function usePreviewGeometry(): void {
   const collar = useProjectStore((s) => s.project.collar);
+  const shade = useProjectStore((s) => s.project.shade);
   const calibration = useProjectStore((s) => s.project.calibration);
   const fabrication = useProjectStore((s) => s.project.fabrication);
   const part = useViewStore((s) => s.part);
@@ -21,8 +22,10 @@ export function usePreviewGeometry(): void {
     if (part === 'fit-test' && calibration.testClearances.length > 0) {
       const i = Math.min(fitTestIndex, calibration.testClearances.length - 1);
       job = { part: 'fit-test', collar, fitTest: calibration.fitTest, clearance: calibration.testClearances[i], label: i + 1 };
-    } else {
+    } else if (part === 'collar') {
       job = { part: 'collar', collar };
+    } else {
+      job = { part: 'assembly', collar, shade };
     }
     const req: BuildJob = {
       job,
@@ -41,5 +44,5 @@ export function usePreviewGeometry(): void {
         .catch((e: Error) => setGeom({ building: false, error: e.message }));
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [collar, calibration.testClearances, calibration.fitTest, fabrication.printer, fabrication.materialPreset, part, fitTestIndex, setGeom]);
+  }, [collar, shade, calibration.testClearances, calibration.fitTest, fabrication.printer, fabrication.materialPreset, part, fitTestIndex, setGeom]);
 }

@@ -1,4 +1,5 @@
-import { useViewStore, type ShadingMode } from '../../state/viewStore';
+import { useViewStore, type ShadingMode, type ViewportPart } from '../../state/viewStore';
+import { useGeometryStore } from '../../state/geometryStore';
 
 const SHADING: { value: ShadingMode; label: string }[] = [
   { value: 'clay', label: 'Clay' },
@@ -7,10 +8,25 @@ const SHADING: { value: ShadingMode; label: string }[] = [
   { value: 'inspection', label: 'Inspect' },
 ];
 
+const PARTS: { value: ViewportPart; label: string }[] = [
+  { value: 'assembly', label: 'Lampshade' },
+  { value: 'collar', label: 'Collar' },
+  { value: 'fit-test', label: 'Fit ring' },
+];
+
 export function ViewToolbar() {
   const v = useViewStore();
+  const size = useGeometryStore((s) => s.result?.report.stats.size);
+  const cutRange = Math.ceil(((size ? Math.max(size[0], size[1]) : 120) / 2) * 1.05);
   return (
     <div className="view-toolbar" role="toolbar" aria-label="View controls">
+      <div className="tool-group">
+        {PARTS.map((p) => (
+          <button key={p.value} type="button" className={v.part === p.value ? 'active' : ''} onClick={() => v.showPart(p.value)}>
+            {p.label}
+          </button>
+        ))}
+      </div>
       <div className="tool-group">
         <button type="button" onClick={() => v.requestView('iso')}>Fit</button>
         <button type="button" onClick={() => v.requestView('top')}>Top</button>
@@ -38,7 +54,7 @@ export function ViewToolbar() {
         <div className="tool-group section-slider">
           <label>
             Cut
-            <input type="range" min={-60} max={60} step={0.5} value={v.sectionOffset} onChange={(e) => v.set({ sectionOffset: Number(e.target.value) })} />
+            <input type="range" min={-cutRange} max={cutRange} step={0.5} value={v.sectionOffset} onChange={(e) => v.set({ sectionOffset: Number(e.target.value) })} />
           </label>
         </div>
       ) : null}

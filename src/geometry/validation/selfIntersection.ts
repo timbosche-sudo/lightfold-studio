@@ -51,6 +51,8 @@ export interface SelfIntersectionResult {
 /**
  * Find intersecting, non-adjacent triangle pairs using a uniform spatial hash.
  * Triangle pairs that share a vertex index are skipped (adjacent faces).
+ * Each candidate pair is tested once: only in the grid cell that contains the
+ * minimum corner of the two bounding boxes' overlap.
  */
 export function findSelfIntersections(mesh: MeshData, maxReport = 50, maxPairs = 200): SelfIntersectionResult {
   const p = mesh.positions;
@@ -58,83 +60,85 @@ export function findSelfIntersections(mesh: MeshData, maxReport = 50, maxPairs =
   const triCount = idx.length / 3;
   if (triCount === 0) return { count: 0, locations: [], truncated: false };
 
-  const tmin = new Float64Array(triCount * 3);
-  const tmax = new Float64Array(triCount * 3);
-  const extents: number[] = [];
-  let gmin: V3 = [Infinity, Infinity, Infinity];
+  const box = new Float64Array(triCount * 6); // minx miny minz maxx maxy maxz
+  const extents = new Float64Array(triCount);
+  const gmin = [Infinity, Infinity, Infinity];
+  const gmax = [-Infinity, -Infinity, -Infinity];
   for (let t = 0; t < triCount; t++) {
+    let e = 0;
     for (let k = 0; k < 3; k++) {
-      let lo = Infinity, hi = -Infinity;
-      for (let v = 0; v < 3; v++) {
-        const c = p[idx[t * 3 + v] * 3 + k];
-        if (c < lo) lo = c;
-        if (c > hi) hi = c;
-      }
-      tmin[t * 3 + k] = lo;
-      tmax[t * 3 + k] = hi;
+      const a = p[idx[t * 3] * 3 + k], b = p[idx[t * 3 + 1] * 3 + k], c = p[idx[t * 3 + 2] * 3 + k];
+      const lo = Math.min(a, b, c), hi = Math.max(a, b, c);
+      box[t * 6 + k] = lo;
+      box[t * 6 + 3 + k] = hi;
       if (lo < gmin[k]) gmin[k] = lo;
+      if (hi > gmax[k]) gmax[k] = hi;
+      if (hi - lo > e) e = hi - lo;
     }
-    extents.push(Math.max(tmax[t * 3] - tmin[t * 3], tmax[t * 3 + 1] - tmin[t * 3 + 1], tmax[t * 3 + 2] - tmin[t * 3 + 2]));
+    extents[t] = e;
   }
-  extents.sort((a, b) => a - b);
-  const cell = Math.max(extents[Math.floor(extents.length * 0.5)], 1e-3);
-  let diag = 0;
-  for (const e of extents) diag = Math.max(diag, e);
+  const sorted = Float64Array.from(extents).sort();
+  const cell = Math.max(sorted[Math.floor(sorted.length * 0.5)] * 1.5, 1e-3);
   const eps = Math.max(cell * 1e-6, 1e-7);
+  const nx = Math.floor((gmax[0] - gmin[0]) / cell) + 1;
+  const ny = Math.floor((gmax[1] - gmin[1]) / cell) + 1;
+  const cellOf = (v: number, k: number) => Math.floor((v - gmin[k]) / cell);
 
-  const grid = new Map<string, number[]>();
+  const grid = new Map<number, number[]>();
   for (let t = 0; t < triCount; t++) {
-    const i0 = Math.floor((tmin[t * 3] - gmin[0]) / cell), i1 = Math.floor((tmax[t * 3] - gmin[0]) / cell);
-    const j0 = Math.floor((tmin[t * 3 + 1] - gmin[1]) / cell), j1 = Math.floor((tmax[t * 3 + 1] - gmin[1]) / cell);
-    const k0 = Math.floor((tmin[t * 3 + 2] - gmin[2]) / cell), k1 = Math.floor((tmax[t * 3 + 2] - gmin[2]) / cell);
-    for (let i = i0; i <= i1; i++)
+    const i0 = cellOf(box[t * 6], 0), i1 = cellOf(box[t * 6 + 3], 0);
+    const j0 = cellOf(box[t * 6 + 1], 1), j1 = cellOf(box[t * 6 + 4], 1);
+    const k0 = cellOf(box[t * 6 + 2], 2), k1 = cellOf(box[t * 6 + 5], 2);
+    for (let k = k0; k <= k1; k++)
       for (let j = j0; j <= j1; j++)
-        for (let k = k0; k <= k1; k++) {
-          const key = `${i},${j},${k}`;
+        for (let i = i0; i <= i1; i++) {
+          const key = i + nx * (j + ny * k);
           let list = grid.get(key);
           if (!list) grid.set(key, (list = []));
           list.push(t);
         }
   }
 
-  const tri = (t: number): [V3, V3, V3] => {
-    const out: V3[] = [];
+  const A: [V3, V3, V3] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  const B: [V3, V3, V3] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  const load = (t: number, out: [V3, V3, V3]) => {
     for (let v = 0; v < 3; v++) {
       const o = idx[t * 3 + v] * 3;
-      out.push([p[o], p[o + 1], p[o + 2]]);
+      out[v][0] = p[o];
+      out[v][1] = p[o + 1];
+      out[v][2] = p[o + 2];
     }
-    return out as [V3, V3, V3];
   };
 
-  const tested = new Set<number>();
   const locations: V3[] = [];
   let count = 0;
-  for (const list of grid.values()) {
+  for (const [key, list] of grid) {
+    if (list.length < 2) continue;
+    const ci = key % nx;
+    const cj = Math.floor(key / nx) % ny;
+    const ck = Math.floor(key / (nx * ny));
     for (let a = 0; a < list.length; a++) {
+      const t1 = list[a];
+      const o1 = t1 * 6;
       for (let b = a + 1; b < list.length; b++) {
-        const t1 = Math.min(list[a], list[b]);
-        const t2 = Math.max(list[a], list[b]);
-        const pairKey = t1 * triCount + t2;
-        if (tested.has(pairKey)) continue;
-        tested.add(pairKey);
-        let disjointAabb = false;
-        for (let k = 0; k < 3; k++) {
-          if (tmax[t1 * 3 + k] < tmin[t2 * 3 + k] || tmax[t2 * 3 + k] < tmin[t1 * 3 + k]) disjointAabb = true;
-        }
-        if (disjointAabb) continue;
+        const t2 = list[b];
+        const o2 = t2 * 6;
+        if (box[o1 + 3] < box[o2] || box[o2 + 3] < box[o1] ||
+            box[o1 + 4] < box[o2 + 1] || box[o2 + 4] < box[o1 + 1] ||
+            box[o1 + 5] < box[o2 + 2] || box[o2 + 5] < box[o1 + 2]) continue;
+        // Test the pair only in the cell holding the overlap's minimum corner.
+        if (cellOf(Math.max(box[o1], box[o2]), 0) !== ci ||
+            cellOf(Math.max(box[o1 + 1], box[o2 + 1]), 1) !== cj ||
+            cellOf(Math.max(box[o1 + 2], box[o2 + 2]), 2) !== ck) continue;
         const a0 = idx[t1 * 3], a1 = idx[t1 * 3 + 1], a2 = idx[t1 * 3 + 2];
         const b0 = idx[t2 * 3], b1 = idx[t2 * 3 + 1], b2 = idx[t2 * 3 + 2];
         if (a0 === b0 || a0 === b1 || a0 === b2 || a1 === b0 || a1 === b1 || a1 === b2 || a2 === b0 || a2 === b1 || a2 === b2) continue;
-        const A = tri(t1);
-        const B = tri(t2);
+        load(t1, A);
+        load(t2, B);
         if (trianglesIntersect(A, B, eps)) {
           count++;
           if (locations.length < maxReport) {
-            locations.push([
-              (A[0][0] + A[1][0] + A[2][0]) / 3,
-              (A[0][1] + A[1][1] + A[2][1]) / 3,
-              (A[0][2] + A[1][2] + A[2][2]) / 3,
-            ]);
+            locations.push([(A[0][0] + A[1][0] + A[2][0]) / 3, (A[0][1] + A[1][1] + A[2][1]) / 3, (A[0][2] + A[1][2] + A[2][2]) / 3]);
           }
           if (count >= maxPairs) return { count, locations, truncated: true };
         }

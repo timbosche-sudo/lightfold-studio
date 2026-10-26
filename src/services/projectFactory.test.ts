@@ -22,3 +22,16 @@ describe('project schema', () => {
     expect(() => normalizeProject('nope')).toThrow();
   });
 });
+
+describe('Phase 1 → Phase 2 migration', () => {
+  it('gives Phase 1 projects (shade: null) the default shade, keeping collar settings', () => {
+    const p1 = { ...newProject('Old'), shade: null } as unknown as Record<string, unknown>;
+    (p1.collar as { fitClearance: number }).fitClearance = 0.6;
+    p1.revisions = [{ id: 'r1', savedAt: '2026-01-01', label: 'Saved', content: { ...(p1 as object), shade: null } }];
+    const p = normalizeProject(JSON.parse(JSON.stringify(p1)));
+    expect(p.shade.family).toBe('cylinder');
+    expect(p.shade.cylinder.wallThickness).toBe(1.2);
+    expect(p.collar.fitClearance).toBe(0.6);
+    expect(p.revisions[0].content.shade.family).toBe('cylinder');
+  });
+});

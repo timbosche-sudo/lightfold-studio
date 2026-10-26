@@ -34,22 +34,27 @@ export function CameraRig() {
     if (camera instanceof THREE.PerspectiveCamera) {
       const fov = THREE.MathUtils.degToRad(camera.fov);
       const aspectFov = Math.min(fov, 2 * Math.atan(Math.tan(fov / 2) * camera.aspect));
-      const dist = (radius / Math.sin(aspectFov / 2)) * 1.15;
+      const dist = (radius / Math.sin(aspectFov / 2)) * 1.25;
       camera.position.copy(center).addScaledVector(dir, dist);
       camera.near = dist / 100;
       camera.far = dist * 20;
     } else if (camera instanceof THREE.OrthographicCamera) {
       camera.position.copy(center).addScaledVector(dir, radius * 6);
-      camera.zoom = Math.min(size.width, size.height) / (radius * 2.6);
+      camera.zoom = Math.min(size.width, size.height) / (radius * 2.8);
       camera.near = 0.1;
       camera.far = radius * 20;
     }
     camera.up.set(0, 0, 1);
     camera.lookAt(center);
+    // Shift the framing so the model sits above the toolbar overlay at the bottom of the viewport.
+    camera.updateMatrixWorld();
+    const screenUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+    const target = center.clone().addScaledVector(screenUp, -radius * 0.16);
+    camera.position.addScaledVector(screenUp, -radius * 0.16);
     camera.updateProjectionMatrix();
     const c = controls as unknown as ControlsLike | null;
     if (c) {
-      c.target.copy(center);
+      c.target.copy(target);
       c.update();
     }
     invalidate();
@@ -64,8 +69,10 @@ export function CameraRig() {
   }, [orthographic, controls]);
 
   useEffect(() => {
-    if (result && !fittedOnce.current && controls) {
+    if (!result || !controls) return;
+    if (!fittedOnce.current || useViewStore.getState().fitPending) {
       fittedOnce.current = true;
+      useViewStore.getState().set({ fitPending: false });
       fit('iso');
     }
   }, [result, controls]);

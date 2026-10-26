@@ -1,6 +1,7 @@
 import type { Project, ProjectContent } from '../types/project';
 import { defaultCollarParams } from '../geometry/collar/collar';
 import { BAMBU_P1S } from '../geometry/presets';
+import { defaultShadeDesign } from '../geometry/generators/registry';
 
 export function uid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
@@ -23,7 +24,7 @@ export function defaultContent(): ProjectContent {
       collarOrientation: 'inverted',
       exportHistory: [],
     },
-    shade: null,
+    shade: defaultShadeDesign(),
     lighting: null,
     wledPresetId: null,
   };
@@ -50,7 +51,7 @@ export function contentOf(p: Project): ProjectContent {
     collarLocked: p.collarLocked,
     calibration: structuredClone(p.calibration),
     fabrication: structuredClone(p.fabrication),
-    shade: p.shade,
+    shade: structuredClone(p.shade),
     lighting: p.lighting,
     wledPresetId: p.wledPresetId,
   };
@@ -70,8 +71,8 @@ export function normalizeProject(raw: unknown): Project {
   collar.retentionLip = { ...d.collar.retentionLip, ...(r.collar?.retentionLip ?? {}) };
   collar.alignmentKey = { ...d.collar.alignmentKey, ...(r.collar?.alignmentKey ?? {}) };
   collar.magnetPockets = { ...d.collar.magnetPockets, ...(r.collar?.magnetPockets ?? {}) };
-  for (const [k, v] of Object.entries(collar)) {
-    if (typeof v === 'number' && !Number.isFinite(v)) throw new Error(`Invalid collar value for ${k}.`);
+  for (const [k, v] of Object.entries({ ...collar, ...(r.shade?.cylinder ?? {}) })) {
+    if (typeof v === 'number' && !Number.isFinite(v)) throw new Error(`Invalid value for ${k}.`);
   }
   return {
     ...base,
@@ -79,7 +80,12 @@ export function normalizeProject(raw: unknown): Project {
     createdAt: r.createdAt ?? base.createdAt,
     updatedAt: r.updatedAt ?? base.updatedAt,
     units: r.units === 'mm' ? 'mm' : 'in',
-    revisions: Array.isArray(r.revisions) ? r.revisions : [],
+    revisions: Array.isArray(r.revisions)
+      ? r.revisions.map((rev) => ({
+          ...rev,
+          content: { ...rev.content, shade: rev.content?.shade ? { ...d.shade, ...rev.content.shade, cylinder: { ...d.shade.cylinder, ...rev.content.shade.cylinder } } : defaultShadeDesign() },
+        }))
+      : [],
     physicalTagId: r.physicalTagId ?? null,
     collar,
     collarLocked: !!r.collarLocked,
@@ -94,7 +100,11 @@ export function normalizeProject(raw: unknown): Project {
       printer: { ...d.fabrication.printer, ...(r.fabrication?.printer ?? {}) },
       exportHistory: r.fabrication?.exportHistory ?? [],
     },
-    shade: null,
+    // Phase 1 projects stored `shade: null`; they receive the default shade.
+    shade: {
+      family: 'cylinder',
+      cylinder: { ...d.shade.cylinder, ...(r.shade?.cylinder ?? {}) },
+    },
     lighting: null,
     wledPresetId: r.wledPresetId ?? null,
   };

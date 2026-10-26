@@ -68,6 +68,32 @@ export interface PrinterProfile {
   safetyMargin: number;
 }
 
+export type ShadeFamilyId = 'cylinder';
+
+export type TransitionProfile = 'smooth' | 'linear';
+
+/** Phase 2 basic shade: a shell that flares from the shoulder OD to a body diameter. */
+export interface CylinderShadeParams {
+  /** Height of the shade above the collar attachment boundary. */
+  height: number;
+  /** Outside diameter of the cylindrical body (the shade's maximum diameter). */
+  maxDiameter: number;
+  /** Wall thickness measured normal to the surface. */
+  wallThickness: number;
+  /** Height over which the wall moves from the shoulder OD to the body diameter. */
+  transitionHeight: number;
+  transitionProfile: TransitionProfile;
+}
+
+/**
+ * The shade design. Parameters are kept per family so switching families
+ * (Phase 3+) does not discard earlier settings.
+ */
+export interface ShadeDesign {
+  family: ShadeFamilyId;
+  cylinder: CylinderShadeParams;
+}
+
 export type MaterialPresetId = 'pla-0.4' | 'petg-0.4' | 'pla-0.2';
 
 export type CollarOrientation = 'installed' | 'inverted';
@@ -75,7 +101,7 @@ export type CollarOrientation = 'installed' | 'inverted';
 export interface ExportRecord {
   id: string;
   at: string;
-  kind: 'collar' | 'fit-test' | 'fit-test-set';
+  kind: 'assembly' | 'collar' | 'fit-test' | 'fit-test-set';
   filename: string;
   triangles: number;
   diagnostic: boolean;
@@ -94,8 +120,7 @@ export interface ProjectContent {
   collarLocked: boolean;
   calibration: CalibrationState;
   fabrication: FabricationSettings;
-  /** Phase 2+. */
-  shade: null;
+  shade: ShadeDesign;
   /** Phase 5+. */
   lighting: null;
   /** Phase 7+. Reference to a WLED preset id on the controller. */

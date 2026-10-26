@@ -4,7 +4,7 @@ import { useGeometryStore } from '../../state/geometryStore';
 import { useViewStore } from '../../state/viewStore';
 import { LengthField, Section, Segmented, Toggle } from '../../components/controls/controls';
 import { PRINT_PRESETS } from '../../geometry/presets';
-import { exportCollar, type ExportOutcome } from '../../services/exportService';
+import { exportAssembly, exportCollar, type ExportOutcome } from '../../services/exportService';
 import type { CollarOrientation, MaterialPresetId } from '../../types/project';
 import { ValidationReportView } from './ValidationReportView';
 
@@ -53,28 +53,32 @@ export function ExportPanel({ outcome, onOutcome }: { outcome: ExportOutcome | n
   const history = useProjectStore((s) => s.project.fabrication.exportHistory);
   const part = useViewStore((s) => s.part);
   const [diagnostic, setDiagnostic] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'assembly' | 'collar' | null>(null);
 
-  const doExport = async () => {
-    setBusy(true);
+  const doExport = async (kind: 'assembly' | 'collar') => {
+    setBusy(kind);
     try {
-      const o = await exportCollar(useProjectStore.getState().project, diagnostic);
+      const project = useProjectStore.getState().project;
+      const o = kind === 'assembly' ? await exportAssembly(project, diagnostic) : await exportCollar(project, diagnostic);
       if (o.ok) {
-        recordExport({ kind: 'collar', filename: o.filename!, triangles: o.result?.report.stats.triangles ?? 0, diagnostic: !!o.result?.report.fatal });
+        recordExport({ kind, filename: o.filename!, triangles: o.result?.report.stats.triangles ?? 0, diagnostic: !!o.result?.report.fatal });
       }
       onOutcome(o);
     } catch (e) {
       onOutcome({ ok: false, message: `Export failed: ${(e as Error).message}` });
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   return (
     <>
       <Section title="Export">
-        <button type="button" className="btn primary" disabled={busy} onClick={doExport}>
-          {busy ? 'Building fabrication mesh…' : 'Export collar STL'}
+        <button type="button" className="btn primary" disabled={busy !== null} onClick={() => doExport('assembly')}>
+          {busy === 'assembly' ? 'Building fabrication mesh…' : 'Export lampshade STL (shade + collar)'}
+        </button>
+        <button type="button" className="btn" disabled={busy !== null} onClick={() => doExport('collar')}>
+          {busy === 'collar' ? 'Building fabrication mesh…' : 'Export collar only STL'}
         </button>
         <Toggle
           label="Diagnostic export"
@@ -84,7 +88,7 @@ export function ExportPanel({ outcome, onOutcome }: { outcome: ExportOutcome | n
         />
         <p className="note">
           Exports are rebuilt at fabrication resolution (360 segments) and re-validated before download. Binary STL, millimetres.
-          Shade, full-assembly and multipart exports arrive with the shade generator (Phase 2) and multipart splitting (Phase 8).
+          The lampshade exports as one fused solid standing on the collar, as installed. Shade-only and multipart exports with joints arrive in Phase 8.
         </p>
         {outcome ? (
           <div className={`callout ${outcome.ok ? 'ok' : 'error'}`}>
@@ -100,7 +104,7 @@ export function ExportPanel({ outcome, onOutcome }: { outcome: ExportOutcome | n
       </Section>
 
       {preview ? (
-        <Section title={`Live validation — ${part === 'fit-test' ? 'fit-test ring' : 'collar'} preview`}>
+        <Section title={`Live validation — ${part === 'fit-test' ? 'fit-test ring' : part === 'collar' ? 'collar' : 'lampshade'} preview`}>
           <ValidationReportView report={preview.report} title="Preview mesh (144 segments)" />
           <p className="note">Build {preview.timings.buildMs.toFixed(0)} ms · validate {preview.timings.validateMs.toFixed(0)} ms (in worker)</p>
         </Section>

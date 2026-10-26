@@ -112,7 +112,7 @@ export function CalibrationPanel({ onOutcome }: { onOutcome: (o: ExportOutcome) 
                 </button>
               </div>
               <div className="btn-row compact">
-                <button type="button" className={`btn small ${viewing ? 'active' : ''}`} onClick={() => view.set({ part: 'fit-test', fitTestIndex: i })}>
+                <button type="button" className={`btn small ${viewing ? 'active' : ''}`} onClick={() => view.showPart('fit-test', i)}>
                   {viewing ? 'Viewing' : 'View'}
                 </button>
                 <button

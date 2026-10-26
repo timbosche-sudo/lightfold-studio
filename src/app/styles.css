@@ -224,6 +224,7 @@ a.btn { color: inherit; }
 }
 .hud-dims div { display: flex; justify-content: space-between; gap: 14px; }
 .hud-dims span { color: var(--text-dim); }
+.hud-dims .sep { border-top: 1px solid var(--line); margin: 3px 0; }
 .hud-dims .note { font-size: 0.7rem; color: var(--text-dim); margin-top: 4px; }
 .dim-label { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: rgba(20,20,20,0.75); color: #fff; white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums; }
 

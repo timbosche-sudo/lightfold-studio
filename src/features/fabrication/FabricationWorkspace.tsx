@@ -11,7 +11,7 @@ type Tab = 'collar' | 'calibrate' | 'export';
 export function FabricationWorkspace() {
   const [tab, setTab] = useState<Tab>('collar');
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null);
-  const setView = useViewStore((s) => s.set);
+  const showPart = useViewStore((s) => s.showPart);
   return (
     <div className="workspace">
       <header className="ws-head">
@@ -26,7 +26,7 @@ export function FabricationWorkspace() {
           ]}
           onChange={(t) => {
             setTab(t);
-            setView({ part: t === 'calibrate' ? 'fit-test' : 'collar' });
+            showPart(t === 'calibrate' ? 'fit-test' : t === 'collar' ? 'collar' : 'assembly');
           }}
         />
       </header>

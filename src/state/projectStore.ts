@@ -8,6 +8,8 @@ import type {
   FitTestParams,
   Project,
   Revision,
+  ShadeDesign,
+  CylinderShadeParams,
 } from '../types/project';
 import { contentOf, newProject, uid } from '../services/projectFactory';
 
@@ -24,6 +26,9 @@ interface ProjectStore {
   updateCollar: (patch: Partial<CollarParams>) => void;
   forceCollar: (patch: Partial<CollarParams>) => void;
   setCollarLocked: (locked: boolean) => void;
+  /** Shade edits never touch the collar, so they are allowed while it is locked. */
+  updateCylinderShade: (patch: Partial<CylinderShadeParams>) => void;
+  setShade: (shade: ShadeDesign) => void;
   updateCalibration: (patch: Partial<CalibrationState>) => void;
   updateFitTest: (patch: Partial<FitTestParams>) => void;
   updateFabrication: (patch: Partial<FabricationSettings>) => void;
@@ -56,6 +61,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     },
     forceCollar: (patch) => edit((p) => ({ collar: { ...p.collar, ...patch } })),
     setCollarLocked: (collarLocked) => edit(() => ({ collarLocked })),
+    updateCylinderShade: (patch) => edit((p) => ({ shade: { ...p.shade, cylinder: { ...p.shade.cylinder, ...patch } } })),
+    setShade: (shade) => edit(() => ({ shade })),
     updateCalibration: (patch) => edit((p) => ({ calibration: { ...p.calibration, ...patch } })),
     updateFitTest: (patch) =>
       edit((p) => ({ calibration: { ...p.calibration, fitTest: { ...p.calibration.fitTest, ...patch } } })),

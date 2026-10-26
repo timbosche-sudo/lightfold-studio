@@ -18,7 +18,7 @@ export function TopBar() {
   const units = useProjectStore((s) => s.project.units);
   const saveState = useProjectStore((s) => s.saveState);
   const setUnits = useProjectStore((s) => s.setUnits);
-  const { workspace, theme, panelOpen, set } = useViewStore();
+  const { workspace, theme, panelOpen, set, showPart } = useViewStore();
   const { save } = useLibraryActions();
   const [saving, setSaving] = useState(false);
 
@@ -34,7 +34,10 @@ export function TopBar() {
       </div>
       <nav className="ws-tabs" aria-label="Workspaces">
         {WORKSPACES.map((w) => (
-          <button key={w.value} type="button" className={workspace === w.value ? 'active' : ''} onClick={() => set({ workspace: w.value, panelOpen: true })}>
+          <button key={w.value} type="button" className={workspace === w.value ? 'active' : ''} onClick={() => {
+              set({ workspace: w.value, panelOpen: true });
+              if (w.value === 'form') showPart('assembly');
+            }}>
             {w.label}
           </button>
         ))}

@@ -100,7 +100,7 @@ export function CollarEditor() {
           hint="Sets shoulder OD"
         />
         <Readout label="Shade attachment boundary" value={`⌀ ${fmt(d.attachment.radius * 2)} at z ${fmt(d.attachment.z)}`} />
-        <p className="note">Generated shades (Phase 2) will originate flush with the outside wall of this shoulder.</p>
+        <p className="note">The shade grows from this edge, flush with the outside wall of the shoulder. Shade settings are in Form Studio.</p>
       </Section>
 
       <Section title="Optional features" defaultOpen={false}>
